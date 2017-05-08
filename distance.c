@@ -24,10 +24,10 @@ const long long max_w = 50;              // max length of vocabulary entries
 int main(int argc, char **argv) {
   FILE *f;
   char st1[max_size];
-  char *bestw[N];
-  char file_name[max_size], st[100][max_size];
-  float dist, len, bestd[N], vec[max_size];
-  long long words, size, a, b, c, d, cn, bi[100];
+  char *best_word[N];
+  char file_name[max_size], sentence[100][max_size];
+  float dist, len, best_distances[N], vector_current_sentence[max_size];
+  long long vocabulary_size, num_dimensions, a, b, c, d, num_words_in_sentence, map_sentence_words_to_vocabulary_index[100];
   char ch;
   float *M;
   char *vocab;
@@ -41,16 +41,16 @@ int main(int argc, char **argv) {
     printf("Input file not found\n");
     return -1;
   }
-  fscanf(f, "%lld", &words);
-  fscanf(f, "%lld", &size);
-  vocab = (char *)malloc((long long)words * max_w * sizeof(char));
-  for (a = 0; a < N; a++) bestw[a] = (char *)malloc(max_size * sizeof(char));
-  M = (float *)malloc((long long)words * (long long)size * sizeof(float));
+  fscanf(f, "%lld", &vocabulary_size);
+  fscanf(f, "%lld", &num_dimensions);
+  vocab = (char *)malloc((long long)vocabulary_size * max_w * sizeof(char));
+  for (a = 0; a < N; a++) best_word[a] = (char *)malloc(max_size * sizeof(char));
+  M = (float *)malloc((long long)vocabulary_size * (long long)num_dimensions * sizeof(float));
   if (M == NULL) {
-    printf("Cannot allocate memory: %lld MB    %lld  %lld\n", (long long)words * size * sizeof(float) / 1048576, words, size);
+    printf("Cannot allocate memory: %lld MB    %lld  %lld\n", (long long)vocabulary_size * num_dimensions * sizeof(float) / 1048576, vocabulary_size, num_dimensions);
     return -1;
   }
-  for (b = 0; b < words; b++) {
+  for (b = 0; b < vocabulary_size; b++) {
     a = 0;
     while (1) {
       vocab[b * max_w + a] = fgetc(f);
@@ -58,18 +58,21 @@ int main(int argc, char **argv) {
       if ((a < max_w) && (vocab[b * max_w + a] != '\n')) a++;
     }
     vocab[b * max_w + a] = 0;
-    for (a = 0; a < size; a++) fread(&M[a + b * size], sizeof(float), 1, f);
+    for (a = 0; a < num_dimensions; a++) fread(&M[a + b * num_dimensions], sizeof(float), 1, f);
+//    since we're using the cosine distance, we can go ahead and already divide all by square root of sun of squares
+//    (covers next 4 lines)
     len = 0;
-    for (a = 0; a < size; a++) len += M[a + b * size] * M[a + b * size];
+    for (a = 0; a < num_dimensions; a++) len += M[a + b * num_dimensions] * M[a + b * num_dimensions];
     len = sqrt(len);
-    for (a = 0; a < size; a++) M[a + b * size] /= len;
+    for (a = 0; a < num_dimensions; a++) M[a + b * num_dimensions] /= len;
   }
   fclose(f);
   while (1) {
-    for (a = 0; a < N; a++) bestd[a] = 0;
-    for (a = 0; a < N; a++) bestw[a][0] = 0;
+    for (a = 0; a < N; a++) best_distances[a] = 0;
+    for (a = 0; a < N; a++) best_word[a][0] = 0;
     printf("Enter word or sentence (EXIT to break): ");
     a = 0;
+//    read word or sentence followed by the new line character
     while (1) {
       st1[a] = fgetc(stdin);
       if ((st1[a] == '\n') || (a >= max_size - 1)) {
@@ -79,64 +82,73 @@ int main(int argc, char **argv) {
       a++;
     }
     if (!strcmp(st1, "EXIT")) break;
-    cn = 0;
+    num_words_in_sentence = 0;
     b = 0;
     c = 0;
     while (1) {
-      st[cn][b] = st1[c];
+      sentence[num_words_in_sentence][b] = st1[c];
       b++;
       c++;
-      st[cn][b] = 0;
+      sentence[num_words_in_sentence][b] = 0;
       if (st1[c] == 0) break;
       if (st1[c] == ' ') {
-        cn++;
+        num_words_in_sentence++;
         b = 0;
         c++;
       }
     }
-    cn++;
-    for (a = 0; a < cn; a++) {
-      for (b = 0; b < words; b++) if (!strcmp(&vocab[b * max_w], st[a])) break;
-      if (b == words) b = -1;
-      bi[a] = b;
-      printf("\nWord: %s  Position in vocabulary: %lld\n", st[a], bi[a]);
+    num_words_in_sentence++;
+    for (a = 0; a < num_words_in_sentence; a++) {
+      for (b = 0; b < vocabulary_size; b++) if (!strcmp(&vocab[b * max_w], sentence[a])) break;
+//      if b is vocabulary_size then the word is not in the vocabulary
+      if (b == vocabulary_size) b = -1;
+      map_sentence_words_to_vocabulary_index[a] = b;
+      printf("\nWord: %s  Position in vocabulary: %lld\n", sentence[a], map_sentence_words_to_vocabulary_index[a]);
+//    stop evaluating when encountering a word not in the vocabulary
       if (b == -1) {
         printf("Out of dictionary word!\n");
         break;
       }
     }
+//    last word analysed was not in the vocabulary, continue to new loop
     if (b == -1) continue;
     printf("\n                                              Word       Cosine distance\n------------------------------------------------------------------------\n");
-    for (a = 0; a < size; a++) vec[a] = 0;
-    for (b = 0; b < cn; b++) {
-      if (bi[b] == -1) continue;
-      for (a = 0; a < size; a++) vec[a] += M[a + bi[b] * size];
+    for (a = 0; a < num_dimensions; a++) vector_current_sentence[a] = 0;
+    for (b = 0; b < num_words_in_sentence; b++) {
+      if (map_sentence_words_to_vocabulary_index[b] == -1) continue;
+      for (a = 0; a < num_dimensions; a++) vector_current_sentence[a] += M[a + map_sentence_words_to_vocabulary_index[b] * num_dimensions];
     }
+//    same as above, we can divide by square root of sum of squares
     len = 0;
-    for (a = 0; a < size; a++) len += vec[a] * vec[a];
+    for (a = 0; a < num_dimensions; a++) len += vector_current_sentence[a] * vector_current_sentence[a];
     len = sqrt(len);
-    for (a = 0; a < size; a++) vec[a] /= len;
-    for (a = 0; a < N; a++) bestd[a] = -1;
-    for (a = 0; a < N; a++) bestw[a][0] = 0;
-    for (c = 0; c < words; c++) {
+    for (a = 0; a < num_dimensions; a++) vector_current_sentence[a] /= len;
+
+    for (a = 0; a < N; a++) best_distances[a] = -1;
+    for (a = 0; a < N; a++) best_word[a][0] = 0;
+//    iterate over all words in the vocabulary
+    for (c = 0; c < vocabulary_size; c++) {
       a = 0;
-      for (b = 0; b < cn; b++) if (bi[b] == c) a = 1;
+//      if the current word is present in the sentence, then ignore the current word
+      for (b = 0; b < num_words_in_sentence; b++) if (map_sentence_words_to_vocabulary_index[b] == c) a = 1;
       if (a == 1) continue;
+//      calculate distance to current word
       dist = 0;
-      for (a = 0; a < size; a++) dist += vec[a] * M[a + c * size];
+      for (a = 0; a < num_dimensions; a++) dist += vector_current_sentence[a] * M[a + c * num_dimensions];
+//      if the current word is closer than some other word in best
       for (a = 0; a < N; a++) {
-        if (dist > bestd[a]) {
+        if (dist > best_distances[a]) {
           for (d = N - 1; d > a; d--) {
-            bestd[d] = bestd[d - 1];
-            strcpy(bestw[d], bestw[d - 1]);
+            best_distances[d] = best_distances[d - 1];
+            strcpy(best_word[d], best_word[d - 1]);
           }
-          bestd[a] = dist;
-          strcpy(bestw[a], &vocab[c * max_w]);
+          best_distances[a] = dist;
+          strcpy(best_word[a], &vocab[c * max_w]);
           break;
         }
       }
     }
-    for (a = 0; a < N; a++) printf("%50s\t\t%f\n", bestw[a], bestd[a]);
+    for (a = 0; a < N; a++) printf("%50s\t\t%f\n", best_word[a], best_distances[a]);
   }
   return 0;
 }
