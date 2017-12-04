@@ -17,7 +17,6 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
-#include <lzma.h>
 #include <stdbool.h>
 
 #define MAX_STRING 100
