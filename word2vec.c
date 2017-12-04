@@ -701,6 +701,9 @@ void ReadVectors() {
         given_vocab[wordID * max_w + a] = 0;
         for (a = 0; a < init_space_size; a++) fread(&given_vectors[a + wordID * init_space_size], sizeof(float), 1, f);
         len = 0;
+        if (wordID % 10000 == 0) {
+            printf("Finished loading %lld words\n", wordID);
+        }
     }
     fclose(f);
 }
