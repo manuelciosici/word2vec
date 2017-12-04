@@ -398,7 +398,9 @@ void InitNet() {
                 syn0[a * space_dimensionality + b] = (((next_random & 0xFFFF) / (real) 65536) - 0.5) / space_dimensionality;
             }
         }
-
+        if (a % 100 == 0) {
+            printf("Initialized %lld words\n", a);
+        }
     }
     printf("%lld words were initialized with their locations in the given vector space", numWordsFoundInVectorSpace);
     CreateBinaryTree();
@@ -605,6 +607,7 @@ void TrainModel() {
     if (save_vocab_file[0] != 0) SaveVocab();
     if (read_vector_file[0] != 0) ReadVectors();
     if (output_file[0] == 0) return;
+    printf("Initializing network...\n");
     InitNet();
     if (num_negative_samples > 0) InitUnigramTable();
     start = clock();
