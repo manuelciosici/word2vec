@@ -17,6 +17,8 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+#include <lzma.h>
+#include <stdbool.h>
 
 #define MAX_STRING 100
 #define EXP_TABLE_SIZE 1000
@@ -25,7 +27,8 @@
 #define MAX_CODE_LENGTH 40
 
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
-
+const long long max_w = 50;              // max length of vocabulary entries
+const long long max_size = 2000;         // max length of strings
 typedef float real;                    // Precision of float numbers
 
 struct vocab_word {
@@ -35,12 +38,19 @@ struct vocab_word {
 };
 
 char train_file[MAX_STRING], output_file[MAX_STRING];
-char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
+char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING], read_vector_file[MAX_STRING];;
 struct vocab_word *vocab;
+
+float *given_vectors;
+char *given_vocab;
+
+void ReadVectors();
+
 int binary = 0, train_cbow = 1, debug_mode = 2, window_size = 5, min_count = 5, num_threads = 12, min_reduce = 1;
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, space_dimensionality = 100;
 long long train_words = 0, word_count_actual = 0, num_iterations = 5, file_size = 0, classes = 0;
+long long init_space_words, init_space_size;
 real alpha = 0.025, starting_alpha, sample = 1e-3;
 real *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
@@ -364,11 +374,34 @@ void InitNet() {
             for (b = 0; b < space_dimensionality; b++)
                 syn1neg[a * space_dimensionality + b] = 0;
     }
-    for (a = 0; a < vocab_size; a++)
-        for (b = 0; b < space_dimensionality; b++) {
-            next_random = next_random * (unsigned long long) 25214903917 + 11;
-            syn0[a * space_dimensionality + b] = (((next_random & 0xFFFF) / (real) 65536) - 0.5) / space_dimensionality;
+    long long numWordsFoundInVectorSpace = 0;
+    for (a = 0; a < vocab_size; a++) {
+//        printf("Word %lld aka %s", a, vocab[a].word);
+        bool wordAlreadyInSpace = false;
+        long long otherIndex = 0;
+        for (long long i = 0; i < init_space_words; i++) {
+            char* otherWord = &given_vocab[i * max_w];
+            if (strcmp(vocab[a].word, otherWord) == 0) {
+//                printf(" ------------- is other vocabulary at location %lld", i);
+                wordAlreadyInSpace = true;
+                otherIndex = i;
+            }
         }
+//        printf("\n");
+        if (wordAlreadyInSpace) {
+            numWordsFoundInVectorSpace++;
+            for (b = 0; b < space_dimensionality; b++) {
+                syn0[a * space_dimensionality + b] = given_vectors[otherIndex * init_space_size + b];
+            }
+        } else {
+            for (b = 0; b < space_dimensionality; b++) {
+                next_random = next_random * (unsigned long long) 25214903917 + 11;
+                syn0[a * space_dimensionality + b] = (((next_random & 0xFFFF) / (real) 65536) - 0.5) / space_dimensionality;
+            }
+        }
+
+    }
+    printf("%lld words were initialized with their locations in the given vector space", numWordsFoundInVectorSpace);
     CreateBinaryTree();
 }
 
@@ -571,6 +604,7 @@ void TrainModel() {
     starting_alpha = alpha;
     if (read_vocab_file[0] != 0) ReadVocab(); else LearnVocabFromTrainFile();
     if (save_vocab_file[0] != 0) SaveVocab();
+    if (read_vector_file[0] != 0) ReadVectors();
     if (output_file[0] == 0) return;
     InitNet();
     if (num_negative_samples > 0) InitUnigramTable();
@@ -634,6 +668,44 @@ void TrainModel() {
     fclose(fo);
 }
 
+void ReadVectors() {
+    FILE *f;
+    char st1[max_size];
+    char file_name[max_size], st[100][max_size];
+    float dist, len, vec[max_size];
+    long long a, b, c, d;
+    char ch;
+    f = fopen(read_vector_file, "rb");
+    if (f == NULL) {
+        printf("Input file not found\n");
+    }
+    fscanf(f, "%lld", &init_space_words);
+    fscanf(f, "%lld", &init_space_size);
+    printf("The given file contains %lld words\n", init_space_words);
+    printf("The given file vectors have %lld dimensions\n", init_space_size);
+    fflush(stdout);
+
+    given_vocab = (char *) malloc((long long) init_space_words * max_w * sizeof(char));
+    given_vectors = (float *) malloc((long long) init_space_words * (long long) init_space_size * sizeof(float));
+    if (given_vectors == NULL) {
+        printf("Cannot allocate memory: %lld MB    %lld  %lld\n", (long long) init_space_words * init_space_size * sizeof(float) / 1048576,
+               init_space_words, init_space_size);
+    }
+    for (long long wordID = 0; wordID < init_space_words; ++wordID) {
+        long long a = 0;
+        while (1) {
+            char ch = fgetc(f);
+            given_vocab[wordID * max_w + a] = ch;
+            if (feof(f) || (given_vocab[wordID * max_w + a] == ' ')) break;
+            if ((a < max_w) && (given_vocab[wordID * max_w + a] != '\n')) a++;
+        }
+        given_vocab[wordID * max_w + a] = 0;
+        for (a = 0; a < init_space_size; a++) fread(&given_vectors[a + wordID * init_space_size], sizeof(float), 1, f);
+        len = 0;
+    }
+    fclose(f);
+}
+
 int ArgPos(char *str, int argc, char **argv) {
     int a;
     for (a = 1; a < argc; a++)
@@ -686,6 +758,8 @@ int main(int argc, char **argv) {
         printf("\t\tThe vocabulary will be saved to <file>\n");
         printf("\t-read-vocab <file>\n");
         printf("\t\tThe vocabulary will be read from <file>, not constructed from the training data\n");
+        printf("\t-read-vectors <file>\n");
+        printf("\t\tThe initial vectors will be those from <file>, not randomly initialized\n");
         printf("\t-cbow <int>\n");
         printf("\t\tUse the continuous bag of words model; default is 1 (use 0 for skip-gram model)\n");
         printf("\nExamples:\n");
@@ -699,6 +773,7 @@ int main(int argc, char **argv) {
     if ((i = ArgPos((char *) "-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
     if ((i = ArgPos((char *) "-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
     if ((i = ArgPos((char *) "-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
+    if ((i = ArgPos((char *) "-read-vectors", argc, argv)) > 0) strcpy(read_vector_file, argv[i + 1]);
     if ((i = ArgPos((char *) "-debug", argc, argv)) > 0) debug_mode = atoi(argv[i + 1]);
     if ((i = ArgPos((char *) "-binary", argc, argv)) > 0) binary = atoi(argv[i + 1]);
     if ((i = ArgPos((char *) "-cbow", argc, argv)) > 0) train_cbow = atoi(argv[i + 1]);
