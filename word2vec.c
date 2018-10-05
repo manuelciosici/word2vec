@@ -367,7 +367,8 @@ void InitNet() {
     for (a = 0; a < vocab_size; a++)
         for (b = 0; b < space_dimensionality; b++) {
             next_random = next_random * (unsigned long long) 25214903917 + 11;
-            current_vectors[a * space_dimensionality + b] = (((next_random & 0xFFFF) / (real) 65536) - 0.5) / space_dimensionality;
+            current_vectors[a * space_dimensionality + b] =
+                    (((next_random & 0xFFFF) / (real) 65536) - 0.5) / space_dimensionality;
         }
     CreateBinaryTree();
 }
@@ -431,9 +432,12 @@ void *TrainModelThread(void *id) {
         if (word == -1) continue;
         for (c = 0; c < space_dimensionality; c++) neu1[c] = 0;
         for (c = 0; c < space_dimensionality; c++) neu1e[c] = 0;
+//        The window under consideration varies in size up to the parameter specified by the user. The following two
+// lines randomly assign a certain amount of reduction to be applied to the current window
         next_random = next_random * (unsigned long long) 25214903917 + 11;
         window_reduction = next_random % window_size;
-        if (train_cbow) {  //train the cbow architecture
+
+        if (train_cbow) {  //train the CBOW architecture
             // in -> hidden
             count_words = 0;
 //            sum up words in the (reduced) surrounding window
@@ -444,22 +448,27 @@ void *TrainModelThread(void *id) {
                     if (c >= sentence_length) continue;
                     last_word = sentence_content[c];
                     if (last_word == -1) continue;
-                    for (c = 0; c < space_dimensionality; c++) neu1[c] += current_vectors[c + last_word * space_dimensionality];
+//                    This is where the summing is actually done
+                    for (long long dimIterator = 0; dimIterator < space_dimensionality; dimIterator++)
+                        neu1[dimIterator] += current_vectors[dimIterator + last_word * space_dimensionality];
                     count_words++;
                 }
             if (count_words) {
+//                Diving gives us the average of the context
                 for (c = 0; c < space_dimensionality; c++) neu1[c] /= count_words;
                 if (use_hierarchical_softmax)
-                    for (d = 0; d < vocab[word].codelen; d++) {
+                    for (long long codeLenPosition = 0; codeLenPosition < vocab[word].codelen; codeLenPosition++) {
                         f = 0;
-                        l2 = vocab[word].point[d] * space_dimensionality;
+                        l2 = vocab[word].point[codeLenPosition] * space_dimensionality;
                         // Propagate hidden -> output
-                        for (c = 0; c < space_dimensionality; c++) f += neu1[c] * syn1[c + l2];
+                        for (long long dimIterator = 0; dimIterator < space_dimensionality; dimIterator++) {
+                            f += neu1[dimIterator] * syn1[dimIterator + l2];
+                        }
                         if (f <= -MAX_EXP) continue;
                         else if (f >= MAX_EXP) continue;
                         else f = expTable[(int) ((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
                         // 'g' is the gradient multiplied by the learning rate
-                        g = (1 - vocab[word].code[d] - f) * alpha;
+                        g = (1 - vocab[word].code[codeLenPosition] - f) * alpha;
                         // Propagate errors output -> hidden
                         for (c = 0; c < space_dimensionality; c++) neu1e[c] += g * syn1[c + l2];
                         // Learn weights hidden -> output
@@ -478,25 +487,36 @@ void *TrainModelThread(void *id) {
                             if (target == word) continue;
                             label = 0;
                         }
-                        l2 = target * space_dimensionality;
+                        const long long int location_target = target * space_dimensionality;
                         f = 0;
-                        for (c = 0; c < space_dimensionality; c++) f += neu1[c] * syn1neg[c + l2];
+                        for (long long dimensionIterator = 0;
+                             dimensionIterator < space_dimensionality; dimensionIterator++) {
+                            f += neu1[dimensionIterator] * syn1neg[dimensionIterator + location_target];
+                        }
                         if (f > MAX_EXP) g = (label - 1) * alpha;
                         else if (f < -MAX_EXP) g = (label - 0) * alpha;
                         else g = (label - expTable[(int) ((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))]) * alpha;
-                        for (c = 0; c < space_dimensionality; c++) neu1e[c] += g * syn1neg[c + l2];
-                        for (c = 0; c < space_dimensionality; c++) syn1neg[c + l2] += g * neu1[c];
+                        for (long long dimensionIterator = 0;
+                             dimensionIterator < space_dimensionality; dimensionIterator++) {
+                            neu1e[dimensionIterator] += g * syn1neg[dimensionIterator + location_target];
+                        }
+                        for (long long dimensionIterator = 0;
+                             dimensionIterator < space_dimensionality; dimensionIterator++) {
+                            syn1neg[dimensionIterator + location_target] += g * neu1[dimensionIterator];
+                        }
                     }
                 // hidden -> in
-                for (a = window_reduction; a < window_size * 2 + 1 - window_reduction; a++)
+                for (a = window_reduction; a < window_size * 2 + 1 - window_reduction; a++) {
                     if (a != window_size) {
                         c = sentence_position - window_size + a;
                         if (c < 0) continue;
                         if (c >= sentence_length) continue;
                         last_word = sentence_content[c];
                         if (last_word == -1) continue;
-                        for (c = 0; c < space_dimensionality; c++) current_vectors[c + last_word * space_dimensionality] += neu1e[c];
+                        for (c = 0; c < space_dimensionality; c++)
+                            current_vectors[c + last_word * space_dimensionality] += neu1e[c];
                     }
+                }
             }
         } else {  //train skip-gram
             for (a = window_reduction; a < window_size * 2 + 1 - window_reduction; a++)
@@ -514,7 +534,10 @@ void *TrainModelThread(void *id) {
                             f = 0;
                             l2 = vocab[word].point[d] * space_dimensionality;
                             // Propagate hidden -> output
-                            for (c = 0; c < space_dimensionality; c++) f += current_vectors[c + l1] * syn1[c + l2];
+                            for (long long dimensionIterator = 0;
+                                 dimensionIterator < space_dimensionality; dimensionIterator++) {
+                                f += current_vectors[dimensionIterator + l1] * syn1[dimensionIterator + l2];
+                            }
                             if (f <= -MAX_EXP) continue;
                             else if (f >= MAX_EXP) continue;
                             else f = expTable[(int) ((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
@@ -583,53 +606,64 @@ void TrainModel() {
         fprintf(fo, "%lld %lld\n", vocab_size, space_dimensionality);
         for (a = 0; a < vocab_size; a++) {
             fprintf(fo, "%s ", vocab[a].word);
-            if (binary) for (b = 0; b < space_dimensionality; b++) fwrite(&current_vectors[a * space_dimensionality + b], sizeof(real), 1, fo);
-            else for (b = 0; b < space_dimensionality; b++) fprintf(fo, "%lf ", current_vectors[a * space_dimensionality + b]);
+            if (binary)
+                for (b = 0; b < space_dimensionality; b++)
+                    fwrite(&current_vectors[a * space_dimensionality + b], sizeof(real), 1, fo);
+            else
+                for (b = 0; b < space_dimensionality; b++)
+                    fprintf(fo, "%lf ", current_vectors[a * space_dimensionality + b]);
             fprintf(fo, "\n");
         }
     } else {
         // Run K-means on the word vectors
-        int clcn = classes, iter = 10, closeid;
+        int numberOfClusters = classes, num_iterations = 10;
         int *centcn = (int *) malloc(classes * sizeof(int));
-        int *cl = (int *) calloc(vocab_size, sizeof(int));
+        int *clusterAssignment = (int *) calloc(vocab_size, sizeof(int));
         real closev, x;
-        real *cent = (real *) calloc(classes * space_dimensionality, sizeof(real));
-        for (a = 0; a < vocab_size; a++) cl[a] = a % clcn;
-        for (a = 0; a < iter; a++) {
-            for (b = 0; b < clcn * space_dimensionality; b++) cent[b] = 0;
-            for (b = 0; b < clcn; b++) centcn[b] = 1;
+        real *centroids = (real *) calloc(classes * space_dimensionality, sizeof(real));
+//        initial assignment is based on word ID
+        for (a = 0; a < vocab_size; a++) clusterAssignment[a] = a % numberOfClusters;
+//        main clustering loop
+        for (a = 0; a < num_iterations; a++) {
+//            initialize all centroids to the zero-vector
+            for (b = 0; b < numberOfClusters * space_dimensionality; b++) centroids[b] = 0;
+            for (b = 0; b < numberOfClusters; b++) centcn[b] = 1;
             for (c = 0; c < vocab_size; c++) {
-                for (d = 0; d < space_dimensionality; d++) cent[space_dimensionality * cl[c] + d] += current_vectors[c * space_dimensionality + d];
-                centcn[cl[c]]++;
+                for (d = 0; d < space_dimensionality; d++) {
+                    centroids[space_dimensionality * clusterAssignment[c] + d] += current_vectors[
+                            c * space_dimensionality + d];
+                }
+                centcn[clusterAssignment[c]]++;
             }
-            for (b = 0; b < clcn; b++) {
+            for (b = 0; b < numberOfClusters; b++) {
                 closev = 0;
                 for (c = 0; c < space_dimensionality; c++) {
-                    cent[space_dimensionality * b + c] /= centcn[b];
-                    closev += cent[space_dimensionality * b + c] * cent[space_dimensionality * b + c];
+                    centroids[space_dimensionality * b + c] /= centcn[b];
+                    closev += centroids[space_dimensionality * b + c] * centroids[space_dimensionality * b + c];
                 }
                 closev = sqrt(closev);
-                for (c = 0; c < space_dimensionality; c++) cent[space_dimensionality * b + c] /= closev;
+                for (c = 0; c < space_dimensionality; c++) centroids[space_dimensionality * b + c] /= closev;
             }
             for (c = 0; c < vocab_size; c++) {
                 closev = -10;
-                closeid = 0;
-                for (d = 0; d < clcn; d++) {
+                int IDOfClosestCluster = 0;
+                for (d = 0; d < numberOfClusters; d++) {
                     x = 0;
-                    for (b = 0; b < space_dimensionality; b++) x += cent[space_dimensionality * d + b] * current_vectors[c * space_dimensionality + b];
+                    for (b = 0; b < space_dimensionality; b++)
+                        x += centroids[space_dimensionality * d + b] * current_vectors[c * space_dimensionality + b];
                     if (x > closev) {
                         closev = x;
-                        closeid = d;
+                        IDOfClosestCluster = d;
                     }
                 }
-                cl[c] = closeid;
+                clusterAssignment[c] = IDOfClosestCluster;
             }
         }
         // Save the K-means classes
-        for (a = 0; a < vocab_size; a++) fprintf(fo, "%s %d\n", vocab[a].word, cl[a]);
+        for (a = 0; a < vocab_size; a++) fprintf(fo, "%s %d\n", vocab[a].word, clusterAssignment[a]);
         free(centcn);
-        free(cent);
-        free(cl);
+        free(centroids);
+        free(clusterAssignment);
     }
     fclose(fo);
 }
