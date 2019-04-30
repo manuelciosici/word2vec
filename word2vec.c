@@ -527,16 +527,17 @@ void *TrainModelThread(void *id) {
                     last_word = sentence_content[c];
                     if (last_word == -1) continue;
                     l1 = last_word * space_dimensionality;
-                    for (c = 0; c < space_dimensionality; c++) neu1e[c] = 0;
+                    for (long long dimIterator = 0; dimIterator < space_dimensionality; dimIterator++) {
+                        neu1e[dimIterator] = 0;
+                    }
                     // HIERARCHICAL SOFTMAX
                     if (use_hierarchical_softmax)
                         for (d = 0; d < vocab[word].codelen; d++) {
                             f = 0;
                             l2 = vocab[word].point[d] * space_dimensionality;
                             // Propagate hidden -> output
-                            for (long long dimensionIterator = 0;
-                                 dimensionIterator < space_dimensionality; dimensionIterator++) {
-                                f += current_vectors[dimensionIterator + l1] * syn1[dimensionIterator + l2];
+                            for (long long dimIterator = 0; dimIterator < space_dimensionality; dimIterator++) {
+                                f += current_vectors[dimIterator + l1] * syn1[dimIterator + l2];
                             }
                             if (f <= -MAX_EXP) continue;
                             else if (f >= MAX_EXP) continue;
